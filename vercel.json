@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "crons": [
+    {
+      "path"    : "/api/sync-products",
+      "schedule": "0 2 * * *"
+    }
+  ],
+  "functions": {
+    "api/sync-products.js": {
+      "maxDuration": 300
+    }
+  }
+}
