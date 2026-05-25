@@ -1,0 +1,55 @@
+# ============================================================
+#  .github/workflows/sync.yml
+#  GitHub Actions — Auto sync Shopify → Google Sheets
+#  Runs every 6 hours for FREE on GitHub Actions
+# ============================================================
+
+name: Shopify Product Sync
+
+on:
+  # ── Run every 6 hours automatically ──────────────────────
+  schedule:
+    - cron: '0 */6 * * *'   # 12AM · 6AM · 12PM · 6PM UTC
+
+  # ── Also allow manual trigger from GitHub Actions tab ────
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync Products to Google Sheets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Trigger Vercel Sync
+        run: |
+          echo "🛍️ Starting Shopify → Google Sheets sync..."
+          echo "⏰ Time: $(date -u)"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            --max-time 300 \
+            "https://${{ secrets.VERCEL_APP_URL }}/api/sync-products?secret=${{ secrets.CRON_SECRET }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          echo "📊 Response: $BODY"
+          echo "🔢 HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "❌ Sync failed with status $HTTP_CODE"
+            exit 1
+          fi
+
+          SUCCESS=$(echo "$BODY" | grep -o '"success":true')
+          if [ -z "$SUCCESS" ]; then
+            echo "❌ Sync returned failure"
+            exit 1
+          fi
+
+          PRODUCTS=$(echo "$BODY" | grep -o '"productsFound":[0-9]*' | grep -o '[0-9]*')
+          ROWS=$(echo "$BODY" | grep -o '"rowsWritten":[0-9]*' | grep -o '[0-9]*')
+
+          echo "✅ Sync successful!"
+          echo "📦 Products found: $PRODUCTS"
+          echo "📝 Rows written: $ROWS"
