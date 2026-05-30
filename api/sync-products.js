@@ -1,58 +1,67 @@
 // ============================================================
-//  api/sync-products.js
-//  Vercel Serverless Function
-//  Fetches ALL active Shopify products (inventory > 1)
-//  and writes them to Google Sheets via Service Account
+//  api/sync-products.js  —  FIXED for Vercel Free Plan
+//  Supports pagination — call with ?page=1, ?page=2 etc
+//  Each page fetches 250 products and writes to sheet
+//  GitHub Actions calls each page separately
 // ============================================================
 
-import { fetchAllShopifyProducts } from "../lib/shopify.js";
-import { writeToGoogleSheet }      from "../lib/sheets.js";
-import { verifySecret }            from "../lib/auth.js";
+import { fetchShopifyPage, getTotalPages } from "../lib/shopify.js";
+import { writePageToGoogleSheet, clearSheet, formatSheet } from "../lib/sheets.js";
+import { verifySecret } from "../lib/auth.js";
 
-export const config = { maxDuration: 300 }; // 5 min timeout for large stores
+export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
-  // ── Security: only allow GET + valid cron secret ──────────
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Vercel Cron passes Authorization header automatically
-  // Manual calls must pass ?secret=YOUR_CRON_SECRET
-  const authorized = verifySecret(req);
-  if (!authorized) {
+  if (!verifySecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  console.log(`[${new Date().toISOString()}] ▶ Sync started`);
+  const action = req.query.action || "sync";
+  const page   = parseInt(req.query.page || "1");
+
+  console.log(`[${new Date().toISOString()}] action=${action} page=${page}`);
 
   try {
-    // ── 1. Fetch products from Shopify ─────────────────────
-    console.log("📦 Fetching Shopify products...");
-    const products = await fetchAllShopifyProducts();
+    // ── action=clear: clear the sheet before sync starts ──
+    if (action === "clear") {
+      await clearSheet();
+      return res.status(200).json({ success: true, action: "clear" });
+    }
 
-    console.log(`✅ Fetched ${products.length} active products with inventory > 1`);
+    // ── action=format: format headers after all pages done ─
+    if (action === "format") {
+      await formatSheet();
+      return res.status(200).json({ success: true, action: "format" });
+    }
 
-    // ── 2. Write to Google Sheets ──────────────────────────
-    console.log("📊 Writing to Google Sheets...");
-    const result = await writeToGoogleSheet(products);
+    // ── action=pages: return how many pages exist ──────────
+    if (action === "pages") {
+      const total = await getTotalPages();
+      return res.status(200).json({ success: true, totalPages: total });
+    }
 
-    console.log(`✅ Sheet updated: ${result.rowsWritten} rows written`);
+    // ── default: sync one page ─────────────────────────────
+    const { rows, hasNextPage, totalFetched } = await fetchShopifyPage(page);
+
+    if (rows.length > 0) {
+      await writePageToGoogleSheet(rows, page);
+    }
 
     return res.status(200).json({
-      success      : true,
-      timestamp    : new Date().toISOString(),
-      productsFound: products.length,
-      rowsWritten  : result.rowsWritten,
-      sheetUrl     : result.sheetUrl,
+      success     : true,
+      page        : page,
+      rowsWritten : rows.length,
+      hasNextPage : hasNextPage,
+      totalFetched: totalFetched,
+      timestamp   : new Date().toISOString(),
     });
 
   } catch (err) {
-    console.error("❌ Sync failed:", err.message);
-    return res.status(500).json({
-      success  : false,
-      error    : err.message,
-      timestamp: new Date().toISOString(),
-    });
+    console.error("❌ Error:", err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 }

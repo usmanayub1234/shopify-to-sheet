@@ -1,55 +1,111 @@
 # ============================================================
 #  .github/workflows/sync.yml
-#  GitHub Actions — Auto sync Shopify → Google Sheets
-#  Runs every 6 hours for FREE on GitHub Actions
+#  Syncs Shopify → Google Sheets page by page
+#  Works on Vercel FREE plan (under 60s per request)
+#  Runs every 6 hours automatically
 # ============================================================
 
 name: Shopify Product Sync
 
 on:
-  # ── Run every 6 hours automatically ──────────────────────
   schedule:
-    - cron: '0 */6 * * *'   # 12AM · 6AM · 12PM · 6PM UTC
-
-  # ── Also allow manual trigger from GitHub Actions tab ────
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
   sync:
     name: Sync Products to Google Sheets
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
-      - name: Trigger Vercel Sync
+
+      - name: Clear Sheet
         run: |
-          echo "🛍️ Starting Shopify → Google Sheets sync..."
-          echo "⏰ Time: $(date -u)"
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "🗑️ Clearing sheet..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=clear&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Sheet cleared"
 
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            --max-time 300 \
-            "https://${{ secrets.VERCEL_APP_URL }}/api/sync-products?secret=${{ secrets.CRON_SECRET }}")
+      - name: Sync Page 1
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 1 (1-250)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=1&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 1 done"
 
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n-1)
+      - name: Sync Page 2
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 2 (251-500)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=2&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 2 done"
 
-          echo "📊 Response: $BODY"
-          echo "🔢 HTTP Status: $HTTP_CODE"
+      - name: Sync Page 3
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 3 (501-750)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=3&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 3 done"
 
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "❌ Sync failed with status $HTTP_CODE"
-            exit 1
-          fi
+      - name: Sync Page 4
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 4 (751-1000)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=4&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 4 done"
 
-          SUCCESS=$(echo "$BODY" | grep -o '"success":true')
-          if [ -z "$SUCCESS" ]; then
-            echo "❌ Sync returned failure"
-            exit 1
-          fi
+      - name: Sync Page 5
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 5 (1001-1250)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=5&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 5 done"
 
-          PRODUCTS=$(echo "$BODY" | grep -o '"productsFound":[0-9]*' | grep -o '[0-9]*')
-          ROWS=$(echo "$BODY" | grep -o '"rowsWritten":[0-9]*' | grep -o '[0-9]*')
+      - name: Sync Page 6
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "📦 Page 6 (1251-1500)..."
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=6&secret=${SECRET}")
+          BODY=$(cat response.txt)
+          echo "Status: $RESPONSE | Body: $BODY"
+          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
+          echo "✅ Page 6 done"
 
-          echo "✅ Sync successful!"
-          echo "📦 Products found: $PRODUCTS"
-          echo "📝 Rows written: $ROWS"
+      - name: Format Sheet
+        run: |
+          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          echo "🎨 Formatting..."
+          curl -s --max-time 55 "${URL}?action=format&secret=${SECRET}"
+          echo "✅ Done"
+
+      - name: Summary
+        run: |
+          echo "🎉 Sync complete at $(date -u)"
+          echo "📊 Google Sheet has fresh data"
