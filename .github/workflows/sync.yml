@@ -1,8 +1,8 @@
 # ============================================================
 #  .github/workflows/sync.yml
-#  Syncs Shopify → Google Sheets page by page
-#  Works on Vercel FREE plan (under 60s per request)
-#  Runs every 6 hours automatically
+#  Calls Shopify REST API + Google Sheets API DIRECTLY
+#  No Vercel involved — no timeout issues!
+#  Runs every 6 hours FREE on GitHub Actions
 # ============================================================
 
 name: Shopify Product Sync
@@ -19,93 +19,125 @@ jobs:
     timeout-minutes: 30
 
     steps:
-
-      - name: Clear Sheet
+      - name: Sync Shopify → Google Sheets
+        env:
+          SHOPIFY_STORE:   ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_TOKEN:   ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SPREADSHEET_ID:  ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+          SHEET_NAME:      ${{ secrets.GOOGLE_SHEET_TAB_NAME }}
+          SA_EMAIL:        ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY:          ${{ secrets.GOOGLE_PRIVATE_KEY }}
         run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "🗑️ Clearing sheet..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=clear&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Sheet cleared"
+          pip install requests google-auth --quiet
 
-      - name: Sync Page 1
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 1 (1-250)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=1&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 1 done"
+          python3 << 'PYTHON'
+          import requests, json, os, time
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
 
-      - name: Sync Page 2
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 2 (251-500)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=2&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 2 done"
+          # ── CONFIG ────────────────────────────────────────────
+          STORE       = os.environ["SHOPIFY_STORE"]
+          TOKEN       = os.environ["SHOPIFY_TOKEN"]
+          SHEET_ID    = os.environ["SPREADSHEET_ID"]
+          SHEET_NAME  = os.environ.get("SHEET_NAME", "Shopify Products")
+          SA_EMAIL    = os.environ["SA_EMAIL"]
+          SA_KEY      = os.environ["SA_KEY"].replace("\\n", "\n")
+          API_VERSION = "2024-10"
 
-      - name: Sync Page 3
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 3 (501-750)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=3&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 3 done"
+          print("🛍️  Starting Shopify → Google Sheets sync...")
+          print(f"📦 Store: {STORE}")
 
-      - name: Sync Page 4
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 4 (751-1000)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=4&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 4 done"
+          # ── FETCH ALL SHOPIFY PRODUCTS ─────────────────────────
+          headers = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
+          rows    = [["Product ID","Product Title","Product Type","Status",
+                      "Total Inventory","Variant ID","Variant Title","SKU",
+                      "Price","Variant Inventory","Last Synced At"]]
 
-      - name: Sync Page 5
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 5 (1001-1250)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=5&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 5 done"
+          url  = f"https://{STORE}/admin/api/{API_VERSION}/products.json?status=active&limit=250&fields=id,title,product_type,variants"
+          page = 1
+          total_products = 0
 
-      - name: Sync Page 6
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "📦 Page 6 (1251-1500)..."
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" --max-time 55 "${URL}?action=sync&page=6&secret=${SECRET}")
-          BODY=$(cat response.txt)
-          echo "Status: $RESPONSE | Body: $BODY"
-          if [ "$RESPONSE" != "200" ]; then echo "❌ Failed: $BODY" && exit 1; fi
-          echo "✅ Page 6 done"
+          while url:
+              print(f"  → Fetching page {page}...")
+              resp = requests.get(url, headers=headers)
+              resp.raise_for_status()
+              products = resp.json().get("products", [])
+              total_products += len(products)
+              print(f"  → Page {page}: {len(products)} products")
 
-      - name: Format Sheet
-        run: |
-          URL="https://shopify-to-sheet.vercel.app/api/sync-products"
-          SECRET="${{ secrets.CRON_SECRET }}"
-          echo "🎨 Formatting..."
-          curl -s --max-time 55 "${URL}?action=format&secret=${SECRET}"
-          echo "✅ Done"
+              for p in products:
+                  total_inv = sum(max(0, v.get("inventory_quantity", 0)) for v in p["variants"])
+                  has_stock = any(v.get("inventory_quantity", 0) >= 1 for v in p["variants"])
+                  if not has_stock:
+                      continue
+                  for v in p["variants"]:
+                      qty = v.get("inventory_quantity", 0)
+                      if qty < 1:
+                          continue
+                      rows.append([
+                          str(p["id"]),
+                          p["title"],
+                          p.get("product_type") or "(No Type)",
+                          "ACTIVE",
+                          total_inv,
+                          str(v["id"]),
+                          v["title"],
+                          v.get("sku") or "",
+                          float(v.get("price", 0)),
+                          qty,
+                          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                      ])
 
-      - name: Summary
-        run: |
-          echo "🎉 Sync complete at $(date -u)"
-          echo "📊 Google Sheet has fresh data"
+              # Next page via Link header
+              link = resp.headers.get("link", "")
+              next_url = None
+              for part in link.split(","):
+                  if 'rel="next"' in part:
+                      next_url = part.split(";")[0].strip().strip("<>")
+                      break
+              url = next_url
+              page += 1
+              if url:
+                  time.sleep(0.5)
+
+          print(f"✅ Total products scanned: {total_products}")
+          print(f"✅ Total rows to write: {len(rows) - 1}")
+
+          # ── WRITE TO GOOGLE SHEETS ─────────────────────────────
+          print("📊 Connecting to Google Sheets...")
+
+          key_data = json.loads(json.dumps({
+              "type": "service_account",
+              "client_email": SA_EMAIL,
+              "private_key": SA_KEY,
+              "token_uri": "https://oauth2.googleapis.com/token"
+          }))
+
+          creds   = service_account.Credentials.from_service_account_info(
+              key_data, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+          )
+          service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+          sheet   = service.spreadsheets()
+
+          # Clear existing data
+          print("🗑️  Clearing sheet...")
+          sheet.values().clear(
+              spreadsheetId=SHEET_ID,
+              range=SHEET_NAME
+          ).execute()
+
+          # Write all data in one batch
+          print(f"✍️  Writing {len(rows)} rows...")
+          sheet.values().update(
+              spreadsheetId=SHEET_ID,
+              range=f"{SHEET_NAME}!A1",
+              valueInputOption="RAW",
+              body={"values": rows}
+          ).execute()
+
+          print("✅ Sheet updated successfully!")
+          print(f"🎉 Sync complete — {len(rows)-1} product variants written")
+          PYTHON
+
+      - name: Done
+        run: echo "✅ Sync finished at $(date -u)"
