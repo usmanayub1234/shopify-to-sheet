@@ -1,10 +1,3 @@
-# ============================================================
-#  .github/workflows/sync.yml
-#  Calls Shopify REST API + Google Sheets API DIRECTLY
-#  No Vercel involved — no timeout issues!
-#  Runs every 6 hours FREE on GitHub Actions
-# ============================================================
-
 name: Shopify Product Sync
 
 on:
@@ -19,125 +12,157 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Sync Shopify → Google Sheets
+      - name: Install dependencies
+        run: pip install requests google-auth google-api-python-client --quiet
+
+      - name: Sync Shopify to Google Sheets
         env:
-          SHOPIFY_STORE:   ${{ secrets.SHOPIFY_STORE_DOMAIN }}
-          SHOPIFY_TOKEN:   ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
-          SPREADSHEET_ID:  ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          SHEET_NAME:      ${{ secrets.GOOGLE_SHEET_TAB_NAME }}
-          SA_EMAIL:        ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          SA_KEY:          ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          SHOPIFY_STORE:  ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_TOKEN:  ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SHEET_ID:       ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+          SHEET_NAME:     ${{ secrets.GOOGLE_SHEET_TAB_NAME }}
+          SA_EMAIL:       ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY:         ${{ secrets.GOOGLE_PRIVATE_KEY }}
         run: |
-          pip install requests google-auth --quiet
+          python3 - << 'PYEOF'
+import requests, json, os, time
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-          python3 << 'PYTHON'
-          import requests, json, os, time
-          from google.oauth2 import service_account
-          from googleapiclient.discovery import build
+# ── CONFIG ──────────────────────────────────────────────
+STORE      = os.environ["SHOPIFY_STORE"]
+TOKEN      = os.environ["SHOPIFY_TOKEN"]
+SHEET_ID   = os.environ["SHEET_ID"]
+SHEET_NAME = os.environ.get("SHEET_NAME", "Shopify Products")
+SA_EMAIL   = os.environ["SA_EMAIL"]
 
-          # ── CONFIG ────────────────────────────────────────────
-          STORE       = os.environ["SHOPIFY_STORE"]
-          TOKEN       = os.environ["SHOPIFY_TOKEN"]
-          SHEET_ID    = os.environ["SPREADSHEET_ID"]
-          SHEET_NAME  = os.environ.get("SHEET_NAME", "Shopify Products")
-          SA_EMAIL    = os.environ["SA_EMAIL"]
-          SA_KEY      = os.environ["SA_KEY"].replace("\\n", "\n")
-          API_VERSION = "2024-10"
+# Fix private key — handles both \\n and real newlines
+SA_KEY = os.environ["SA_KEY"]
+SA_KEY = SA_KEY.replace("\\n", "\n")
+if "-----BEGIN PRIVATE KEY-----" not in SA_KEY:
+    raise ValueError("GOOGLE_PRIVATE_KEY secret is missing or malformed")
 
-          print("🛍️  Starting Shopify → Google Sheets sync...")
-          print(f"📦 Store: {STORE}")
+API_VER = "2024-10"
 
-          # ── FETCH ALL SHOPIFY PRODUCTS ─────────────────────────
-          headers = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
-          rows    = [["Product ID","Product Title","Product Type","Status",
-                      "Total Inventory","Variant ID","Variant Title","SKU",
-                      "Price","Variant Inventory","Last Synced At"]]
+print(f"Starting sync for store: {STORE}")
 
-          url  = f"https://{STORE}/admin/api/{API_VERSION}/products.json?status=active&limit=250&fields=id,title,product_type,variants"
-          page = 1
-          total_products = 0
+# ── STEP 1: FETCH ALL SHOPIFY PRODUCTS ──────────────────
+shopify_headers = {
+    "X-Shopify-Access-Token": TOKEN,
+    "Content-Type": "application/json"
+}
 
-          while url:
-              print(f"  → Fetching page {page}...")
-              resp = requests.get(url, headers=headers)
-              resp.raise_for_status()
-              products = resp.json().get("products", [])
-              total_products += len(products)
-              print(f"  → Page {page}: {len(products)} products")
+HEADERS_ROW = [
+    "Product ID", "Product Title", "Product Type", "Status",
+    "Total Inventory", "Variant ID", "Variant Title", "SKU",
+    "Price", "Variant Inventory", "Last Synced At"
+]
 
-              for p in products:
-                  total_inv = sum(max(0, v.get("inventory_quantity", 0)) for v in p["variants"])
-                  has_stock = any(v.get("inventory_quantity", 0) >= 1 for v in p["variants"])
-                  if not has_stock:
-                      continue
-                  for v in p["variants"]:
-                      qty = v.get("inventory_quantity", 0)
-                      if qty < 1:
-                          continue
-                      rows.append([
-                          str(p["id"]),
-                          p["title"],
-                          p.get("product_type") or "(No Type)",
-                          "ACTIVE",
-                          total_inv,
-                          str(v["id"]),
-                          v["title"],
-                          v.get("sku") or "",
-                          float(v.get("price", 0)),
-                          qty,
-                          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                      ])
+all_rows = [HEADERS_ROW]
+url = f"https://{STORE}/admin/api/{API_VER}/products.json?status=active&limit=250&fields=id,title,product_type,variants"
+page = 1
+total_products = 0
+synced_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-              # Next page via Link header
-              link = resp.headers.get("link", "")
-              next_url = None
-              for part in link.split(","):
-                  if 'rel="next"' in part:
-                      next_url = part.split(";")[0].strip().strip("<>")
-                      break
-              url = next_url
-              page += 1
-              if url:
-                  time.sleep(0.5)
+while url:
+    print(f"  Fetching page {page}...")
+    resp = requests.get(url, headers=shopify_headers, timeout=30)
+    
+    if resp.status_code != 200:
+        raise Exception(f"Shopify error {resp.status_code}: {resp.text[:200]}")
+    
+    products = resp.json().get("products", [])
+    total_products += len(products)
+    print(f"  Page {page}: {len(products)} products")
 
-          print(f"✅ Total products scanned: {total_products}")
-          print(f"✅ Total rows to write: {len(rows) - 1}")
+    for p in products:
+        variants   = p.get("variants", [])
+        total_inv  = sum(max(0, v.get("inventory_quantity", 0)) for v in variants)
+        has_stock  = any(v.get("inventory_quantity", 0) >= 1 for v in variants)
+        
+        if not has_stock:
+            continue
+        
+        for v in variants:
+            qty = v.get("inventory_quantity", 0)
+            if qty < 1:
+                continue
+            all_rows.append([
+                str(p["id"]),
+                str(p.get("title", "")),
+                str(p.get("product_type") or "(No Type)"),
+                "ACTIVE",
+                int(total_inv),
+                str(v["id"]),
+                str(v.get("title", "")),
+                str(v.get("sku") or ""),
+                float(v.get("price", 0)),
+                int(qty),
+                synced_at
+            ])
 
-          # ── WRITE TO GOOGLE SHEETS ─────────────────────────────
-          print("📊 Connecting to Google Sheets...")
+    # Next page from Link header
+    link = resp.headers.get("link", "")
+    url  = None
+    for part in link.split(","):
+        if 'rel="next"' in part:
+            url = part.split(";")[0].strip().strip("<>")
+            break
+    
+    page += 1
+    if url:
+        time.sleep(0.3)
 
-          key_data = json.loads(json.dumps({
-              "type": "service_account",
-              "client_email": SA_EMAIL,
-              "private_key": SA_KEY,
-              "token_uri": "https://oauth2.googleapis.com/token"
-          }))
+print(f"Total products scanned: {total_products}")
+print(f"Total rows to write: {len(all_rows) - 1}")
 
-          creds   = service_account.Credentials.from_service_account_info(
-              key_data, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-          )
-          service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-          sheet   = service.spreadsheets()
+# ── STEP 2: WRITE TO GOOGLE SHEETS ──────────────────────
+print("Connecting to Google Sheets...")
 
-          # Clear existing data
-          print("🗑️  Clearing sheet...")
-          sheet.values().clear(
-              spreadsheetId=SHEET_ID,
-              range=SHEET_NAME
-          ).execute()
+service_account_info = {
+    "type": "service_account",
+    "client_email": SA_EMAIL,
+    "private_key": SA_KEY,
+    "private_key_id": "key",
+    "client_id": "",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token"
+}
 
-          # Write all data in one batch
-          print(f"✍️  Writing {len(rows)} rows...")
-          sheet.values().update(
-              spreadsheetId=SHEET_ID,
-              range=f"{SHEET_NAME}!A1",
-              valueInputOption="RAW",
-              body={"values": rows}
-          ).execute()
+creds = service_account.Credentials.from_service_account_info(
+    service_account_info,
+    scopes=["https://www.googleapis.com/auth/spreadsheets"]
+)
 
-          print("✅ Sheet updated successfully!")
-          print(f"🎉 Sync complete — {len(rows)-1} product variants written")
-          PYTHON
+service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+sheet   = service.spreadsheets()
+
+# Clear sheet
+print("Clearing existing data...")
+sheet.values().clear(
+    spreadsheetId=SHEET_ID,
+    range=SHEET_NAME
+).execute()
+
+# Write in batches of 1000 rows to avoid API limits
+BATCH = 1000
+print(f"Writing {len(all_rows)} rows in batches...")
+
+for i in range(0, len(all_rows), BATCH):
+    batch      = all_rows[i:i+BATCH]
+    start_row  = i + 1
+    range_name = f"{SHEET_NAME}!A{start_row}"
+    sheet.values().update(
+        spreadsheetId=SHEET_ID,
+        range=range_name,
+        valueInputOption="RAW",
+        body={"values": batch}
+    ).execute()
+    print(f"  Written rows {start_row} to {start_row + len(batch) - 1}")
+    time.sleep(0.5)
+
+print(f"SUCCESS: {len(all_rows)-1} variant rows written to Google Sheets")
+PYEOF
 
       - name: Done
-        run: echo "✅ Sync finished at $(date -u)"
+        run: echo "Sync complete at $(date -u)"
